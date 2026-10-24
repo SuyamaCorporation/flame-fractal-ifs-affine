@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flame Fractal IFS Affine Transform Draw</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  input[type=range] { accent-color: #f97316; }
+  .coeff-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr; gap: 4px; }
+  .coeff-row input { width: 100%; padding: 2px 4px; font-size: 11px; background: #1f2937; color: #f9fafb; border: 1px solid #374151; border-radius: 4px; }
+</style>
+</head>
+<body class="bg-gray-950 min-h-screen flex flex-col items-center p-4">
+<h1 class="text-2xl font-bold text-white mb-1">🔥 Flame Fractal IFS</h1>
+<p class="text-gray-400 text-sm mb-3">Iterated Function System with tone-mapped HDR glow</p>
+
+<div class="flex flex-col lg:flex-row gap-4 w-full max-w-5xl">
+  <div class="flex-1 flex justify-center">
+    <canvas id="canvas" width="500" height="500" class="rounded-xl border border-gray-700" aria-label="Flame fractal canvas"></canvas>
+  </div>
+  <div class="lg:w-72 space-y-3">
+    <div class="bg-gray-800 rounded-xl p-3">
+      <div class="text-gray-300 text-sm font-bold mb-2">Presets</div>
+      <div class="flex flex-wrap gap-2">
+        <button onclick="loadPreset('fern')" class="bg-green-700 text-white px-3 py-1 rounded text-sm hover:bg-green-600">Fern</button>
+        <button onclick="loadPreset('sierpinski')" class="bg-blue-700 text-white px-3 py-1 rounded text-sm hover:bg-blue-600">Sierpinski</button>
+        <button onclick="loadPreset('dragon')" class="bg-red-700 text-white px-3 py-1 rounded text-sm hover:bg-red-600">Dragon</button>
+        <button onclick="loadPreset('flame')" class="bg-orange-700 text-white px-3 py-1 rounded text-sm hover:bg-orange-600">Flame</button>
+        <button onclick="randomize()" class="bg-purple-700 text-white px-3 py-1 rounded text-sm hover:bg-purple-600">Random</button>
+      </div>
+    </div>
+
+    <div class="bg-gray-800 rounded-xl p-3">
+      <div class="text-gray-300 text-sm font-bold mb-2">Render Settings</div>
+      <div class="space-y-2">
+        <div class="flex items-center gap-2">
+          <label class="text-gray-400 text-xs w-24">Iterations/frame</label>
+          <input type="range" id="iters" min="5000" max="100000" step="5000" value="50000" class="flex-1">
+          <span id="itersVal" class="text-orange-300 text-xs w-14">50000</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <label class="text-gray-400 text-xs w-24">Brightness</label>
+          <input type="range" id="bright" min="0.5" max="5" step="0.1" value="2" class="flex-1">
+          <span id="brightVal" class="text-orange-300 text-xs w-8">2.0</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <label class="text-gray-400 text-xs w-24">Gamma</label>
+          <input type="range" id="gamma" min="1" max="5" step="0.1" value="2.5" class="flex-1">
+          <span id="gammaVal" class="text-orange-300 text-xs w-8">2.5</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <label class="text-gray-400 text-xs w-24">Color Cycle</label>
+          <input type="range" id="colorCycle" min="0" max="360" step="1" value="0" class="flex-1">
+          <span id="colorCycleVal" class="text-orange-300 text-xs w-8">0°</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-gray-800 rounded-xl p-3">
+      <div class="text-gray-300 text-sm font-bold mb-2">Transforms (a,b,c,d,e,f)</div>
+      <div id="transformInputs" class="space-y-2"></div>
+    </div>
+
+    <div class="flex gap-2">
+      <button onclick="startRender()" class="flex-1 bg-orange-600 text-white py-2 rounded-lg font-bold hover:bg-orange-700">Render</button>
+      <button onclick="stopRender()" class="flex-1 bg-gray-600 text-white py-2 rounded-lg font-bold hover:bg-gray-700">Stop</button>
+      <button onclick="clearCanvas()" class="flex-1 bg-red-800 text-white py-2 rounded-lg font-bold hover:bg-red-700">Clear</button>
+    </div>
+    <div id="status" class="text-gray-400 text-xs text-center"></div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+let transforms = [];
+let histogram, colorBuf;
+let animId = null, running = false, totalIters = 0;
+
+const PRESETS = {
+  fern: {
+    transforms: [
+      {a:0,b:0,c:0,d:0.16,e:0,f:0,p:0.01,col:0.1},
+      {a:0.85,b:0.04,c:-0.04,d:0.85,e:0,f:1.6,p:0.85,col:0.3},
+      {a:0.2,b:-0.26,c:0.23,d:0.22,e:0,f:1.6,p:0.07,col:0.6},
+      {a:-0.15,b:0.28,c:0.26,d:0.24,e:0,f:0.44,p:0.07,col:0.9}
+    ],
+    scale: 60, offX: 0, offY: -5
+  },
+  sierpinski: {
+    transforms: [
+      {a:0.5,b:0,c:0,d:0.5,e:0,f:0,p:0.33,col:0},
+      {a:0.5,b:0,c:0,d:0.5,e:0.5,f:0,p:0.33,col:0.5},
+      {a:0.5,b:0,c:0,d:0.5,e:0.25,f:0.5,p:0.34,col:1}
+    ],
+    scale: 350, offX: -0.5, offY: -0.5
+  },
+  dragon: {
+    transforms: [
+      {a:0.824074,b:0.281482,c:-0.212346,d:0.864198,e:-1.882290,f:-0.110607,p:0.787473,col:0.4},
+      {a:0.088272,b:0.520988,c:-0.463889,d:-0.377778,e:0.785360,f:8.095795,p:0.212527,col:0.9}
+    ],
+    scale: 30, offX: 2, offY: -6
+  },
+  flame: {
+    transforms: [
+      {a:0.5,b:0.1,c:-0.1,d:0.5,e:-0.5,f:0,p:0.4,col:0},
+      {a:-0.5,b:0.1,c:0.1,d:0.5,e:0.5,f:0,p:0.4,col:0.5},
+      {a:0.3,b:0.5,c:-0.5,d:0.3,e:0,f:0.7,p:0.2,col:1}
+    ],
+    scale: 150, offX: 0, offY: -0.5
+  }
+};
+
+let currentPreset = PRESETS.fern;
+
+function loadPreset(name) {
+  currentPreset = PRESETS[name];
+  transforms = currentPreset.transforms.map(t => ({...t}));
+  renderTransformInputs();
+  startRender();
+}
+
+function randomize() {
+  const n = 3 + Math.floor(Math.random()*2);
+  transforms = [];
+  let pSum = 0;
+  for (let i=0;i<n;i++) {
+    const p = Math.random();
+    pSum += p;
+    transforms.push({a:(Math.random()-0.5)*1.5,b:(Math.random()-0.5)*0.5,c:(Math.random()-0.5)*0.5,d:(Math.random()-0.5)*1.5,e:(Math.random()-0.5)*2,f:(Math.random()-0.5)*2,p,col:i/(n-1)});
+  }
+  transforms.forEach(t=>t.p/=pSum);
+  currentPreset = {transforms, scale:100, offX:0, offY:0};
+  renderTransformInputs();
+  startRender();
+}
+
+function renderTransformInputs() {
+  const div = document.getElementById('transformInputs');
+  div.innerHTML='';
+  transforms.forEach((t,i)=>{
+    const row = document.createElement('div');
+    row.className='coeff-row';
+    ['a','b','c','d','e','f'].forEach(k=>{
+      const inp = document.createElement('input');
+      inp.type='number'; inp.step='0.01';
+      inp.value=t[k].toFixed(3);
+      inp.title=k; inp.placeholder=k;
+      inp.addEventListener('change',ev=>{transforms[i][k]=parseFloat(ev.target.value)||0;});
+      row.appendChild(inp);
+    });
+    div.appendChild(row);
+  });
+}
+
+function initBuffers() {
+  histogram = new Float32Array(W * H * 4); // RGBA density
+  colorBuf = new Float32Array(W * H * 3);
+  totalIters = 0;
+}
+
+function hsvToRgb(h, s, v) {
+  h=(h%360+360)%360;
+  const c=v*s, x=c*(1-Math.abs((h/60)%2-1)), m=v-c;
+  let r,g,b;
+  if(h<60){r=c;g=x;b=0}else if(h<120){r=x;g=c;b=0}else if(h<180){r=0;g=c;b=x}else if(h<240){r=0;g=x;b=c}else if(h<300){r=x;g=0;b=c}else{r=c;g=0;b=x}
+  return [(r+m)*255,(g+m)*255,(b+m)*255];
+}
+
+function ifsStep(iters) {
+  const ts = transforms;
+  const cumProb = [];
+  let acc = 0;
+  for (const t of ts) { acc+=t.p; cumProb.push(acc); }
+
+  let x = Math.random()*2-1, y = Math.random()*2-1;
+  const colorCycle = parseInt(document.getElementById('colorCycle').value);
+  const scale = currentPreset.scale || 100;
+  const offX = currentPreset.offX || 0;
+  const offY = currentPreset.offY || 0;
+
+  for (let i=0; i<iters; i++) {
+    const r = Math.random();
+    let ti = 0;
+    while (ti < cumProb.length-1 && r > cumProb[ti]) ti++;
+    const t = ts[ti];
+    const nx = t.a*x + t.b*y + t.e;
+    const ny = t.c*x + t.d*y + t.f;
+    x=nx; y=ny;
+
+    if (i < 20) continue; // skip first iterations
+
+    const px = Math.floor((x - offX) * scale + W/2);
+    const py = Math.floor(H/2 - (y - offY) * scale);
+    if (px<0||px>=W||py<0||py>=H) continue;
+
+    const idx = py*W+px;
+    histogram[idx*4]++;
+    const hue = (t.col * 360 + colorCycle) % 360;
+    const [cr,cg,cb] = hsvToRgb(hue, 0.9, 1);
+    colorBuf[idx*3] += cr;
+    colorBuf[idx*3+1] += cg;
+    colorBuf[idx*3+2] += cb;
+  }
+  totalIters += iters;
+}
+
+function renderFrame() {
+  const gamma = parseFloat(document.getElementById('gamma').value);
+  const bright = parseFloat(document.getElementById('bright').value);
+  const imageData = ctx.createImageData(W, H);
+  const data = imageData.data;
+
+  let maxLog = 0;
+  const logs = new Float32Array(W*H);
+  for (let i=0;i<W*H;i++) {
+    if (histogram[i*4]>0) {
+      logs[i] = Math.log(histogram[i*4]+1);
+      if (logs[i]>maxLog) maxLog=logs[i];
+    }
+  }
+  if (maxLog===0) return;
+
+  for (let i=0;i<W*H;i++) {
+    if (histogram[i*4]===0) { data[i*4+3]=255; continue; }
+    const alpha = Math.pow(logs[i]/maxLog, 1/gamma);
+    const density = histogram[i*4];
+    const r = colorBuf[i*3]/density;
+    const g = colorBuf[i*3+1]/density;
+    const b = colorBuf[i*3+2]/density;
+    data[i*4] = Math.min(255, r * alpha * bright);
+    data[i*4+1] = Math.min(255, g * alpha * bright);
+    data[i*4+2] = Math.min(255, b * alpha * bright);
+    data[i*4+3] = 255;
+  }
+  ctx.putImageData(imageData,0,0);
+}
+
+let frameCount = 0;
+function loop() {
+  if (!running) return;
+  const iters = parseInt(document.getElementById('iters').value);
+  ifsStep(iters);
+  frameCount++;
+  if (frameCount % 2 === 0) renderFrame();
+  if (frameCount % 10 === 0) {
+    document.getElementById('status').textContent = `${(totalIters/1e6).toFixed(1)}M iterations`;
+  }
+  animId = requestAnimationFrame(loop);
+}
+
+function startRender() {
+  stopRender();
+  initBuffers();
+  frameCount=0;
+  running=true;
+  loop();
+}
+
+function stopRender() {
+  running=false;
+  if (animId) cancelAnimationFrame(animId);
+}
+
+function clearCanvas() {
+  stopRender();
+  ctx.clearRect(0,0,W,H);
+  document.getElementById('status').textContent='';
+}
+
+document.getElementById('iters').addEventListener('input',e=>{document.getElementById('itersVal').textContent=e.target.value;});
+document.getElementById('bright').addEventListener('input',e=>{document.getElementById('brightVal').textContent=parseFloat(e.target.value).toFixed(1);});
+document.getElementById('gamma').addEventListener('input',e=>{document.getElementById('gammaVal').textContent=parseFloat(e.target.value).toFixed(1);});
+document.getElementById('colorCycle').addEventListener('input',e=>{document.getElementById('colorCycleVal').textContent=e.target.value+'°';});
+
+loadPreset('fern');
+</script>
+</body>
+</html>
